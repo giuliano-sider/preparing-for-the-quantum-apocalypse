@@ -7,6 +7,9 @@
 import re # for parsing the polynomial strings 
 
 
+def is_positive_power_of_2(num):
+    return num > 1 and (num & (num - 1)) == 0 # classic bit twiddling hack
+
 def extended_euclidean_algorithm(a, b):
     """purely iterative version of the extended euclidean algorithm.
        compute gcd of integers a and b, as well as integers x and y"""
@@ -40,18 +43,6 @@ def extended_euclidean_algorithm(a, b):
 
     return (sign_a * s_j_2, sign_b * t_j_2, r_j_2)
 
-def test_extended_euclidean_algorithm(arglist):
-    for a, b, correct_g in arglist:
-        x, y, g = extended_euclidean_algorithm(a, b)
-        if a * x + b * y != g or g != correct_g:
-            print('\nFAILED!: extended_euclid(%d, %d) returned x = %d, y = %d, g = %d\n'
-                  'where %d * %d + %d * %d = %d, and expected gcd was %d\n'
-                  % (a, b, x, y, g, a, x, b, y, g, correct_g))
-        else:
-            print('\nPASSED: extended_euclid(%d, %d) returned x = %d, y = %d, g = %d\n'
-                  'where %d * %d + %d * %d = %d, and expected gcd was %d\n'
-                  % (a, b, x, y, g, a, x, b, y, g, correct_g))
-
 
 def mod_inverse(num, m):
     """calculate multiplicative inverse of num, modulo a positive integer m"""
@@ -60,7 +51,7 @@ def mod_inverse(num, m):
     a, b, g = extended_euclidean_algorithm(num, m)
 
     if g != 1:
-        raise ValueError('the number %d does not have a multiplicative inverse modulo %d'
+        raise ArithmeticError('the number %d does not have a multiplicative inverse modulo %d'
                          % (num, m))
     return a % m
 
@@ -86,47 +77,54 @@ def mod_exp(num, n, m):
     return result
 
 
-def poly_extended_euclidean_algorithm(x, y):
-    """extended euclidean algorithm - only for polynomials"""
-   
-   # make sure to return a monic polynomial as the gcd. return 0 if both polys are 0.
-    if y == poly('0', p=y.p):
-        if x == poly('0', p=x.p):
-            monic_gcd = poly('0', p=x.p) # pathological case of gcd(0, 0)
-        else:
-            make_monic = mod_inverse(x.leading_coeff(), x.p)
-            monic_gcd = x * make_monic
-            return (poly(str(make_monic), p=x.p), poly('0', p=x.p), monic_gcd) 
+def poly_extended_euclidean_algorithm(a, b):
+    """iterative version of the extended euclidean algorithm for polynomials
+       takes 2 polynomials with coefficients in Z_p and returns a gcd for them, as well
+       as polynomials x and y such that ax + by = gcd"""
+    """note: technically we must provide another poly method for O(n) multiplication when one of the
+             polynomials is just one term in size"""
+    assert type(a) is poly and type(b) is poly and a.p == b.p
 
-    _a, _b, g = poly_extended_euclidean_algorithm(y, x % y)
-    a, b = _b, _a - _b * (x / y)
+    p = a.p
+    zero_poly = poly(polynomial='0', p=p)
+    one_poly = poly(polynomial='1', p=p)
 
-    return (a, b, g)
+    # maintain the loop invariant: r_j = s_j * a + t_j * b, for all j > 0
+    r_j_2 = a; s_j_2 = one_poly; t_j_2 = zero_poly
+    r_j_1 = b; s_j_1 = zero_poly; t_j_1 = one_poly
 
+    while r_j_1 != zero_poly:
+        if r_j_2.degree() < r_j_1.degree():
+            # must switch the two
+            r_j_1, r_j_2 = r_j_2, r_j_1
+            s_j_1, s_j_2 = s_j_2, s_j_1
+            t_j_1, t_j_2 = t_j_2, t_j_1
+            continue
 
-def poly_mod_inverse(x, mod_poly):
-    a, b, g = poly_extended_euclidean_algorithm(x, mod_poly)
-    if g != poly('1', p=x.p):
-        raise ValueError('the polynomial %s does not have a multiplicative inverse modulo %s'
-                         % (repr(x), repr(mod_poly)))
-    return a % mod_poly
+        # must compute r_j = r_j_2 - a_n * b_k_inv * x^(n - k) * r_j_1
+        reducing_term = poly(polynomial='%d x^%d'
+                                        % (r_j_2.leading_coeff() * mod_inverse(r_j_1.leading_coeff(), p),
+                                           r_j_2.degree() - r_j_1.degree()),
+                             p=p)
 
+        r_j = r_j_2 - reducing_term * r_j_1
+        s_j = s_j_2 - reducing_term * s_j_1
+        t_j = t_j_2 - reducing_term * t_j_1
 
-def poly_mod_exp(x, n, mod_poly):
-    if x % mod_poly == poly('0', p=x.p):
-        return poly('0', p=x.p)
+        r_j_1, r_j_2 = r_j, r_j_1
+        s_j_1, s_j_2 = s_j, s_j_1
+        t_j_1, t_j_2 = t_j, t_j_1
 
-    exponent = abs(n)
-    result = poly('1', p=x.p)
-    while exponent != 0: # multiply and square algorithm starting with the least significant bit of exponent
-        if exponent % 2 == 1:
-            result = (result * x) % mod_poly
-        x = (x * x) % mod_poly
-        exponent //= 2
-    if n < 0:
-        result = poly_mod_inverse(result, mod_poly)
+    return (s_j_2, t_j_2, r_j_2)
 
-    return result
+def make_monic(a):
+    """turns a non-zero polynomial monic by dividing through by the leading coefficient"""
+    assert type(a) is poly
+
+    if a.degree() == -1: # zero polynomial cannot be monic
+        return a
+    else:
+        return a * mod_inverse(a.leading_coeff(), a.p)
 
 
 def coefflist2str(coefflist):
@@ -220,7 +218,7 @@ def binarycoefflist2num(coefflist):
 
 
 class poly():
-    """represent a polynomial with coefficients in a finite field of (prime) order p. """
+    """represent a polynomial with coefficients modulo (a not necessarily prime) p. """
     """the list of coefficients has the degree 0, 1, 2, ..., degree(poly) terms in order. """
     """the last term is non-zero and gives the polynomial its degree. """
     """the zero polynomial is represented by an empty list; it is defined to have degree -1"""
@@ -330,16 +328,36 @@ class poly():
     def __ne__(self, rhs):
         return not self == rhs
 
+    def __pow__(self, rhs):
+        assert type(rhs) is int and rhs >= 0
+
+        result = poly('1', p=self.p)
+        aux = poly('1', p=self.p)
+        while rhs != 0: # multiply and square algorithm starting with the least significant bit of exponent
+            if rhs % 2 == 1:
+                result = (result * aux)
+            aux = (aux * aux)
+            rhs //= 2
+
+        return result
+
 
 class mod_poly():
     """represent a polynomial 
        with coefficients modulo p, 
-       modulo the polynomial mod_poly (not necessarily irreducible)"""
+       modulo the polynomial mod_poly 
+       (not necessarily irreducible: can be used to compute in convolution rings, like with mod_poly='x^677 - 1')"""
 
     def __init__(self, polynomial='0', p=2, mod_poly='x'):
         self.poly = poly(polynomial, p)
         self.mod_poly = poly(mod_poly, p)
         self.poly = self.poly % self.mod_poly
+
+    def copy(self):
+        new_poly = mod_poly()
+        new_poly.poly = self.poly.copy()
+        new_poly.mod_poly = self.mod_poly.copy()
+        return new_poly
 
     def __add__(self, rhs, subtract=False):
         new_poly = mod_poly()
@@ -382,11 +400,61 @@ class mod_poly():
     def __ne__(self, rhs):
         return not self == rhs
 
+    def __pow__(self, rhs):
+        assert type(rhs) is int
+
+        result = mod_poly('1', p=self.p, mod_poly=self.mod_poly)
+        aux = mod_poly('1', p=self.p, mod_poly=self.mod_poly)
+        while rhs != 0: # multiply and square algorithm starting with the least significant bit of exponent
+            if rhs % 2 == 1:
+                result = (result * aux)
+            aux = (aux * aux)
+            rhs //= 2
+        if rhs < 0:
+            result = result.invert()
+
+        return result
+
     def invert(self):
+        """designed for polynomials with coefficients in Z_p, p prime"""
+        x, y, g = poly_extended_euclidean_algorithm(self.poly, self.mod_poly)
+        if g.degree() != 0: # if not a constant, non-zero polynomial, the polynomial is not invertible
+            raise ArithmeticError('the polynomial %s does not have a multiplicative inverse modulo %s'
+                             % (repr(self.poly), repr(self.mod_poly)))
+
+        adjust_for_monic_gcd = x * mod_inverse(g.leading_coeff(), self.poly.p)
+
         new_poly = mod_poly()
-        new_poly.poly = poly_mod_inverse(self.poly, self.mod_poly)
+        new_poly.poly = adjust_for_monic_gcd % self.mod_poly
         new_poly.mod_poly = self.mod_poly.copy()
         return new_poly
+
+#    def lift_inverse(self, inverse):
+#        """given a polynomial and its inverse (with coefficients in Z_p), 
+#           lift it to the inverse polynomial with coefficients in Z_(p*p)"""
+#        assert type(inverse) is mod_poly
+#
+#        p = self.p * self.p
+#        f = self.copy()
+#        f_inv = inverse.copy()
+#        two_poly = mod_poly(polynomial='2', p=p, mod_poly=str(f_inv.mod_poly))
+#        tmp = f * f_inv
+#        f_inv = tmp * (two_poly - tmp)
+#        
+#        while p < power:
+#            # we have no choice, with this design, but to modify p
+#            p = p * p
+#            f.poly.p = p
+#            f.mod_poly.p = p
+#            f_inv.poly.p = p
+#            f_inv.mod_poly.p = p
+#            two_poly.poly.p = p
+#            two_poly.mod_poly.p = p
+#
+#            tmp = f * f_inv
+#            f_inv = tmp * (two_poly - tmp)
+#
+#        return f_inv
 
 
 
@@ -410,9 +478,41 @@ def test_expr_equality(test_cases):
                   % (i, test_cases[i][0], repr(result), repr(expected_result)))
         else:
             print('test %d PASSED:\nexpression "%s"\nyielded value "%s"\nwhich is what we expected\n'
-                  % (i, test_cases[i][1], repr(result)))
+                  % (i, test_cases[i][0], repr(result)))
             successcount += 1
-    print('%d out of %d tests passed' % (successcount, len(test_cases)))
+    print('%d out of %d tests passed\n\n' % (successcount, len(test_cases)))
+
+def test_extended_euclidean_algorithm(arglist):
+    successcount = 0; i = 0
+    for a, b, correct_g in arglist:
+        x, y, g = extended_euclidean_algorithm(a, b)
+        if a * x + b * y != g or g != correct_g:
+            print('\nFAILED test %d: extended_euclid(%d, %d) returned x = %d, y = %d, g = %d\n'
+                  'where %d * %d + %d * %d = %d, and expected gcd was %d\n'
+                  % (i, a, b, x, y, g, a, x, b, y, g, correct_g))
+        else:
+            print('\nPASSED test %d: extended_euclid(%d, %d) returned x = %d, y = %d, g = %d\n'
+                  'where %d * %d + %d * %d = %d, and expected gcd was %d\n'
+                  % (i, a, b, x, y, g, a, x, b, y, g, correct_g))
+            successcount += 1
+        i += 1
+    print('%d out of %d tests passed\n\n' % (successcount, len(arglist)))
+
+def test_poly_extended_euclidean_algorithm(arglist):
+    successcount = 0; i = 0
+    for a, b, correct_g in arglist:
+        x, y, g = poly_extended_euclidean_algorithm(a, b)
+        if a * x + b * y != g or make_monic(g) != make_monic(correct_g):
+            print('\nFAILED test %d: poly_extended_extended_euclid(%s, %s) returned x = (%s), y = (%s), g = (%s)\n'
+                  'where (%s) * (%s) + (%s) * (%s) = (%s), and expected gcd was (%s)\n'
+                  % (i, a, b, x, y, g, a, x, b, y, g, correct_g))
+        else:
+            print('\nPASSED test %d: poly_extended_extended_euclid(%s, %s) returned x = (%s), y = (%s), g = (%s)\n'
+                  'where (%s) * (%s) + (%s) * (%s) = (%s), and expected gcd was (%s)\n'
+                  % (i, a, b, x, y, g, a, x, b, y, g, correct_g))
+            successcount += 1
+        i += 1
+    print('%d out of %d tests passed\n\n' % (successcount, len(arglist)))
 
 
 def run_unit_tests():
@@ -423,6 +523,21 @@ def run_unit_tests():
          (-1, -13, 1)]
     )
 
+    test_poly_extended_euclidean_algorithm(
+        # each test case has format: (a, b, gcd(a, b))
+        [(poly(polynomial='x + 4', p=1000000007) * poly(polynomial='x + 7', p=1000000007) * poly(polynomial='x + 4', p=1000000007),
+          poly(polynomial='x + 5', p=1000000007) * poly(polynomial='x + 7', p=1000000007) * poly(polynomial='x + 4', p=1000000007),
+          poly(polynomial='x + 4', p=1000000007) * poly(polynomial='x + 7', p=1000000007))]
+    )
+
+    poly_extended_euclidean_algorithm_test_cases = [
+        ("make_monic(poly_extended_euclidean_algorithm(poly(polynomial='x + 4', p=1000000007) * poly(polynomial='x + 7', p=1000000007) * poly(polynomial='x + 4', p=1000000007), "
+                                                      "poly(polynomial='x + 5', p=1000000007) * poly(polynomial='x + 7', p=1000000007) * poly(polynomial='x + 4', p=1000000007))[2])",
+
+         "poly(polynomial='x + 4', p=1000000007) * poly(polynomial='x + 7', p=1000000007)")
+    ]
+    test_expr_equality(poly_extended_euclidean_algorithm_test_cases)
+
     mod_exp_test_cases = [
         ("mod_exp(num=3, n=17, m=174311)",
          "150023"),
@@ -430,11 +545,13 @@ def run_unit_tests():
         ("mod_exp(num=3, n=-17, m=174311)",
          "31169")
     ]
+    test_expr_equality(mod_exp_test_cases)
 
     poly_test_cases = [
         ("poly(polynomial='x^2 + x', p=2) + poly(polynomial='x + 1', p=2)",
          "poly(polynomial='x^2 + 1', p=2)"),
     ]
+    test_expr_equality(poly_test_cases)
 
     mod_poly_test_cases = [
         ("mod_poly(polynomial='x^6', p=2, mod_poly='x^3 - 1')",
@@ -476,8 +593,7 @@ def run_unit_tests():
         ("mod_poly('x^2', p=2, mod_poly='x^3 - 1').invert()",
          "mod_poly(polynomial='x', p=2, mod_poly='x^3 + 1')")
     ]
-
-    test_expr_equality(mod_exp_test_cases + poly_test_cases + mod_poly_test_cases)
+    test_expr_equality(mod_poly_test_cases)
 
 
 if __name__ == '__main__':
